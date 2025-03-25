@@ -1,6 +1,5 @@
 import WebSocket from "ws";
 import notifier from "node-notifier";
-import { exec } from "child_process";
 import fs from "fs";
 
 // Mapa de chatrooms y usuarios a monitorear
@@ -219,142 +218,104 @@ const chatroomUserMap = {
   14095046: "Nikan"
 };
 
+// Prefijo para los canales
 const channelPrefix = "chatrooms";
 const logFilePath = "chatlog.txt";
-let webSocketInstances = {}; // Almacena las instancias de WebSocket
-let notifiedMessages = {}; // Mantener un registro de mensajes notificados para evitar repeticiones
 
-// Crea o abre el archivo de registro y agrega un mensaje de inicio
+// Almacenar instancias de WebSockets
+let webSocketInstances = {};
+
+// Crear o abrir archivo de logs
 fs.appendFileSync(logFilePath, "Inicio del registro de chat:\n");
 
-// Función para verificar si un mensaje contiene el patrón específico para un usuario
-function containsPattern(username, message) {
-  // Patrón flexible: dos letras, dos números, dos letras
-  const specificPattern = /[A-Za-z]{2}\d{2}[A-Za-z]{2}/;
-
-  // Verificar si el mensaje cumple con el patrón
-  return specificPattern.test(message);
+// Función para verificar el patrón específico en los mensajes
+function containsPattern(message) {
+  const pattern = /[A-Za-z]{2}\d{2}[A-Za-z]{2}/;
+  return pattern.test(message);
 }
 
-// Función para notificar y reproducir la alarma
-function notifyAndAlarm(username, message) {
-  // Verificar si el mensaje ya ha sido notificado
-  if (notifiedMessages[username] === message) {
-    console.log(`Mensaje ya notificado anteriormente: ${message}`);
-    return; // No reproducir la alarma nuevamente
-  }
-
-  // Agregar el mensaje al registro de mensajes notificados
-  notifiedMessages[username] = message;
+// Función para notificar
+function notifyUser(username, message) {
+  console.log(`🔔 Notificación: ${username} → ${message}`);
 
   notifier.notify({
     title: `Nuevo mensaje de ${username}`,
     message: message,
   });
 
-  console.log(`Mensaje notificado: ${message}`); // Mostrar el mensaje en la consola
-
-  playAlarm();
+  // Guardar en logs
+  const logMessage = `[${new Date().toLocaleString()}] ${username}: ${message}\n`;
+  fs.appendFileSync(logFilePath, logMessage);
 }
 
-// Función para reproducir la alarma
-function playAlarm() {
-  exec("start C:\\Users\\Ju4ns\\Documents\\GitHub\\KickChatConnection\\alarm.mp3", (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error al reproducir el sonido de la alarma: ${error}`);
-      return;
-    }
-    if (stderr) {
-      console.error(`Error al reproducir el sonido de la alarma: ${stderr}`);
-      return;
-    }
-    console.log("Sonando alarma...");
-  });
-}
+// Función para conectar WebSocket
+function createWebSocket(chatroomNumber, userToMonitor) {
+  if (webSocketInstances[chatroomNumber]) {
+    return; // Evita crear múltiples conexiones al mismo canal
+  }
 
-// Función para crear y manejar el WebSocket
-function createAndHandleWebSocket(chatroomNumber, userToMonitor) {
-  const chat = new WebSocket(
+  const ws = new WebSocket(
     "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false"
   );
 
-  // Almacena la instancia WebSocket en el objeto
-  webSocketInstances[chatroomNumber] = chat;
+  webSocketInstances[chatroomNumber] = ws;
 
-  chat.on("open", function open() {
-    chat.send(
+  ws.on("open", () => {
+    ws.send(
       JSON.stringify({
         event: "pusher:subscribe",
         data: { auth: "", channel: `${channelPrefix}.${chatroomNumber}.v2` },
       })
     );
 
-    console.log(
-      "\x1b[33m%s\x1b[0m",
-      `Connected to Kick.com Streamer Chat: ${chatroomNumber} - Monitoring: ${userToMonitor}`
-    );
+    console.log(`✅ Conectado a chat: ${chatroomNumber} - Monitoreando: ${userToMonitor}`);
   });
 
-  chat.on("error", function error(err) {
-    console.error("WebSocket error:", err);
+  ws.on("error", (err) => {
+    console.error(`❌ Error en WebSocket (${chatroomNumber}):`, err);
   });
 
-  chat.on("message", function message(data) {
+  ws.on("message", (data) => {
     try {
       const jsonData = JSON.parse(data);
-
       if (jsonData.data) {
         const jsonDataSub = JSON.parse(jsonData.data);
-
         if (jsonDataSub && jsonDataSub.chatroom_id === parseInt(chatroomNumber)) {
-          if (jsonDataSub.sender && jsonDataSub.sender.username) {
-            const senderUsername = jsonDataSub.sender.username;
-            const messageContent = jsonDataSub.content;
-
-            // Verificar si el mensaje es de un usuario que deseas monitorear
-            if (Object.values(chatroomUserMap).includes(senderUsername)) {
-              // Si el mensaje cumple con el patrón y es del usuario específico, notificar
-              if (userToMonitor === senderUsername && containsPattern(senderUsername, messageContent)) {
-                console.log(`Mensaje de ${senderUsername}: ${jsonDataSub.content}`);
-                notifyAndAlarm(senderUsername, jsonDataSub.content);
-
-                // Guardar el mensaje en el archivo de registro
-                const logMessage = `[${new Date().toLocaleString()}] ${senderUsername}: ${jsonDataSub.content}\n`;
-                fs.appendFileSync(logFilePath, logMessage);
-              } else {
-                // Si no es un mensaje específico para notificar, solo mostrar en la consola
-                console.log(`Mensaje de ${senderUsername}: ${jsonDataSub.content}`);
-              }
+          const senderUsername = jsonDataSub.sender?.username;
+          const messageContent = jsonDataSub.content;
+          if (senderUsername && chatroomUserMap[chatroomNumber] === senderUsername) {
+            if (containsPattern(messageContent)) {
+              notifyUser(senderUsername, messageContent);
+            } else {
+              console.log(`💬 Mensaje de ${senderUsername}: ${messageContent}`);
             }
           }
         }
       }
     } catch (error) {
-      console.log(error);
+      console.error(`⚠️ Error procesando mensaje:`, error);
     }
   });
 }
 
-// Función para reiniciar el WebSocket para todos los chatrooms
-function restartWebSocketForAllChatrooms() {
-  // Cerrar todas las conexiones WebSocket existentes
+// Función para reiniciar WebSockets (cada 30 min en vez de 5 min)
+function restartWebSockets() {
+  console.log("♻️ Reiniciando conexiones WebSocket...");
+
   for (const chatroomNumber in webSocketInstances) {
-    webSocketInstances[chatroomNumber].terminate(); // Usar terminate() en lugar de close()
+    webSocketInstances[chatroomNumber].terminate();
+    delete webSocketInstances[chatroomNumber];
   }
 
-  // Limpiar el objeto que almacena las instancias de WebSocket
-  webSocketInstances = {};
-
-  // Volver a crear WebSocket para cada chatroom
   for (const [chatroomNumber, userToMonitor] of Object.entries(chatroomUserMap)) {
-    createAndHandleWebSocket(chatroomNumber, userToMonitor);
+    createWebSocket(chatroomNumber, userToMonitor);
   }
 }
 
-// Iniciar WebSocket para cada chatroom
+// Iniciar conexiones
 for (const [chatroomNumber, userToMonitor] of Object.entries(chatroomUserMap)) {
-  createAndHandleWebSocket(chatroomNumber, userToMonitor);
+  createWebSocket(chatroomNumber, userToMonitor);
 }
 
-// Reiniciar el WebSocket para todos los chatrooms cada 5 minutos
-setInterval(restartWebSocketForAllChatrooms, 300000);
+// Reiniciar WebSockets cada 30 minutos
+setInterval(restartWebSockets, 1800000);
