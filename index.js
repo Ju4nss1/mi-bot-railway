@@ -2,7 +2,6 @@ import WebSocket from "ws";
 import notifier from "node-notifier";
 import fs from "fs";
 
-// Mapa de chatrooms y usuarios a monitorear
 const chatroomUserMap = {
   1079212: "SHAAKR",
   468092: "Grim",
@@ -218,23 +217,17 @@ const chatroomUserMap = {
   14095046: "Nikan"
 };
 
-// Prefijo para los canales
 const channelPrefix = "chatrooms";
 const logFilePath = "chatlog.txt";
-
-// Almacenar instancias de WebSockets
 let webSocketInstances = {};
 
-// Crear o abrir archivo de logs
 fs.appendFileSync(logFilePath, "Inicio del registro de chat:\n");
 
-// Función para verificar el patrón específico en los mensajes
 function containsPattern(message) {
   const pattern = /[A-Za-z]{2}\d{2}[A-Za-z]{2}/;
   return pattern.test(message);
 }
 
-// Función para notificar
 function notifyUser(username, message) {
   console.log(`🔔 Notificación: ${username} → ${message}`);
 
@@ -243,16 +236,12 @@ function notifyUser(username, message) {
     message: message,
   });
 
-  // Guardar en logs
   const logMessage = `[${new Date().toLocaleString()}] ${username}: ${message}\n`;
   fs.appendFileSync(logFilePath, logMessage);
 }
 
-// Función para conectar WebSocket
 function createWebSocket(chatroomNumber, userToMonitor) {
-  if (webSocketInstances[chatroomNumber]) {
-    return; // Evita crear múltiples conexiones al mismo canal
-  }
+  if (webSocketInstances[chatroomNumber]) return;
 
   const ws = new WebSocket(
     "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0-rc2&flash=false"
@@ -267,12 +256,7 @@ function createWebSocket(chatroomNumber, userToMonitor) {
         data: { auth: "", channel: `${channelPrefix}.${chatroomNumber}.v2` },
       })
     );
-
     console.log(`✅ Conectado a chat: ${chatroomNumber} - Monitoreando: ${userToMonitor}`);
-  });
-
-  ws.on("error", (err) => {
-    console.error(`❌ Error en WebSocket (${chatroomNumber}):`, err);
   });
 
   ws.on("message", (data) => {
@@ -280,14 +264,16 @@ function createWebSocket(chatroomNumber, userToMonitor) {
       const jsonData = JSON.parse(data);
       if (jsonData.data) {
         const jsonDataSub = JSON.parse(jsonData.data);
-        if (jsonDataSub && jsonDataSub.chatroom_id === parseInt(chatroomNumber)) {
+        if (jsonDataSub.chatroom_id === parseInt(chatroomNumber)) {
           const senderUsername = jsonDataSub.sender?.username;
           const messageContent = jsonDataSub.content;
+
           if (senderUsername && chatroomUserMap[chatroomNumber] === senderUsername) {
             if (containsPattern(messageContent)) {
+              console.log(`\x1b[41m\x1b[30m🔥 Código Detectado! ${senderUsername}: ${messageContent} 🔥\x1b[0m`);
               notifyUser(senderUsername, messageContent);
             } else {
-              console.log(`💬 Mensaje de ${senderUsername}: ${messageContent}`);
+              console.log(`💬 ${senderUsername}: ${messageContent}`);
             }
           }
         }
@@ -297,6 +283,14 @@ function createWebSocket(chatroomNumber, userToMonitor) {
     }
   });
 }
+
+for (const [chatroomNumber, userToMonitor] of Object.entries(chatroomUserMap)) {
+  createWebSocket(chatroomNumber, userToMonitor);
+}
+
+setInterval(() => {
+  console.log("✅ Bot sigue activo:", new Date().toLocaleString());
+}, 60000);
 
 // Función para reiniciar WebSockets (cada 30 min en vez de 5 min)
 function restartWebSockets() {
